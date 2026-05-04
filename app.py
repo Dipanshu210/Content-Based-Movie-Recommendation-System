@@ -14,19 +14,17 @@ def fetch_movie_extra_details(movie_id):
     details = {
         "poster": "https://via.placeholder.com/500x750?text=No+Image",
         "overview": "No description available.",
-        "cast": "Information unavailable",
+        "cast": "N/A",
         "rating": 0,
-        "vote_count": 0,   # 👥 Viewership
+        "vote_count": 0,
         "popularity": 0,
         "trailer": "#"
     }
 
     try:
-        # Basic Details
         r = requests.get(f"{base_url}?api_key={api_key}&language=en-US", timeout=10)
         if r.status_code == 200:
             data = r.json()
-
             if data.get("poster_path"):
                 details["poster"] = "https://image.tmdb.org/t/p/w500/" + data["poster_path"]
 
@@ -35,15 +33,13 @@ def fetch_movie_extra_details(movie_id):
             details["vote_count"] = data.get("vote_count", 0)
             details["popularity"] = round(data.get("popularity", 0))
 
-        # Cast
         c = requests.get(f"{base_url}/credits?api_key={api_key}", timeout=10)
         if c.status_code == 200:
-            cast_data = c.json().get("cast", [])
-            names = [i["name"] for i in cast_data[:3]]
+            cast_list = c.json().get("cast", [])[:3]
+            names = [actor["name"] for actor in cast_list]
             if names:
                 details["cast"] = ", ".join(names)
 
-        # Trailer
         v = requests.get(f"{base_url}/videos?api_key={api_key}", timeout=10)
         if v.status_code == 200:
             for vid in v.json().get("results", []):
@@ -60,26 +56,21 @@ def fetch_movie_extra_details(movie_id):
 def get_recommendations(search_type, value=None):
     results = []
 
-    # 1. Standard
     if search_type == "title":
         idx = movies[movies['title'] == value].index[0]
         distances = similarity[idx]
+        recs = sorted(list(enumerate(distances)),
+                      reverse=True,
+                      key=lambda x: x[1])[1:6]
 
-        rec = sorted(list(enumerate(distances)),
-                     reverse=True,
-                     key=lambda x: x[1])[1:6]
-
-        for i in rec:
+        for i in recs:
             results.append({
                 "title": movies.iloc[i[0]].title,
                 "id": movies.iloc[i[0]].movie_id
             })
 
-    # 2. Mood
     elif search_type == "mood":
-        mask = movies['tags'].str.contains(value, case=False, na=False)
-        filtered = movies[mask]
-
+        filtered = movies[movies['tags'].str.contains(value, case=False, na=False)]
         if not filtered.empty:
             sample = filtered.sample(n=min(5, len(filtered)))
             for _, row in sample.iterrows():
@@ -88,17 +79,14 @@ def get_recommendations(search_type, value=None):
                     "id": row.movie_id
                 })
 
-    # 3. High Rated
     elif search_type == "top":
-        top_movies = movies.sort_values(by='vote_average', ascending=False).head(5)
-
-        for _, row in top_movies.iterrows():
+        top = movies.sort_values(by="vote_average", ascending=False).head(5)
+        for _, row in top.iterrows():
             results.append({
                 "title": row.title,
                 "id": row.movie_id
             })
 
-    # Fetch API details
     final = []
     for r in results:
         final.append({
@@ -113,13 +101,13 @@ def get_recommendations(search_type, value=None):
 st.set_page_config(page_title="Movie App", layout="wide")
 st.title("🎥 Movie Recommendation System")
 
-# Load Data
+# Load data
 try:
     movies = pd.read_pickle("artifacts/movie_list.pkl")
     similarity = pd.read_pickle("artifacts/similarity.pkl")
     movie_titles = movies["title"].values
 except:
-    st.error("Error loading files")
+    st.error("Dataset not found")
     st.stop()
 
 # ---------------- SIDEBAR ----------------
@@ -132,14 +120,14 @@ mode = st.sidebar.radio("Choose Mode", [
 ])
 
 # ---------------- WATCHLIST ----------------
-st.sidebar.header("⭐ Watchlist")
+st.sidebar.header("❤️ Watchlist")
 
 if st.session_state.watchlist:
     for i, item in enumerate(st.session_state.watchlist):
         col1, col2 = st.sidebar.columns([3,1])
         col1.write(item["title"])
 
-        if col2.button("❌", key=f"remove_{item['title']}_{i}"):
+        if col2.button("❌", key=f"remove_{item['id']}_{i}"):
             st.session_state.watchlist.pop(i)
             st.rerun()
 else:
@@ -177,26 +165,28 @@ if recommendations:
         with cols[i]:
             st.image(movie["details"]["poster"])
             st.markdown(f"**{movie['title']}**")
+            st.caption(f"⭐ {movie['details']['rating']} | 👥 {movie['details']['vote_count']}")
 
-            # Viewership + rating
-            st.caption(f"⭐ {movie['details']['rating']} | 👥 {movie['details']['vote_count']} views")
+            # ✅ UNIQUE KEY (CRITICAL FIX)
+            key = f"{movie['id']}_{i}_{mode}"
 
-            unique_key = f"{movie['id']}_{i}"
+            # ✅ CHECK CORRECTLY
+            is_added = any(m["id"] == movie["id"] for m in st.session_state.watchlist)
 
-            # Watchlist button
-            if not any(m["title"] == movie["title"] for m in st.session_state.watchlist):
-                if st.button("⭐ Add", key=f"add_{unique_key}"):
+            if not is_added:
+                if st.button("⭐ Add", key=f"add_{key}"):
                     st.session_state.watchlist.append({
+                        "id": movie["id"],  # ✅ IMPORTANT FIX
                         "title": movie["title"],
                         "poster": movie["details"]["poster"]
                     })
                     st.rerun()
             else:
-                st.button("❤️ Added", key=f"added_{unique_key}", disabled=True)
+                st.button("❤️ Added", key=f"added_{key}", disabled=True)
 
-            # Details
+            # DETAILS
             with st.expander("Details"):
                 st.write("🎭 Cast:", movie["details"]["cast"])
                 st.write("📝 Overview:", movie["details"]["overview"])
                 st.write("📈 Popularity:", movie["details"]["popularity"])
-                st.link_button("▶ Watch Trailer", movie["details"]["trailer"])
+                st.link_button("▶ Trailer", movie["details"]["trailer"])
